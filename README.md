@@ -17,5 +17,5 @@ Welcome to my public learning journey! 🚀
 
 
 
-||||you can check my cs50 repo i have uploaded all the problems i solved till week 5 (or till now) i am new to github so i dont know much about it 
-||||here is the link to my CS50 repo which contain all the previous problems solution of CS50 - https://github.com/nikhil-partap/CS50
+you can check my cs50 repo i have uploaded all the problems i solved till week 5 (or till now) i am new to github so i dont know much about it 
+here is the link to my CS50 repo which contain all the previous problems solution of CS50 - https://github.com/nikhil-partap/CS50
