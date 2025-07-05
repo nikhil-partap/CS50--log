@@ -7,7 +7,7 @@ My public learning journey as I work through CS50
 Welcome to my public learning journey! 🚀
 
 ## 📚 What I'm Learning
-- [X] CS50 – Harvard's Intro to Computer Science
+- [ ] CS50 – Harvard's Intro to Computer Science
 
 ## 🗓️ Progress Log
 | Date | Topic | Notes |
