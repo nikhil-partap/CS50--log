@@ -60,9 +60,9 @@ void insert_at_end(node **head, int value)
 
 void insert_at_beginning(node **head, int value)
 {
-    node *temp = *head;
-    node  *head = create_node(value);
-    head->next = temp;
+    node *new_node = create_node (value);
+     new_node->next =  *head;
+    *head = new_node;
 }
 
 int search(node *head, int target)
