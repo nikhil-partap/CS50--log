@@ -4,7 +4,7 @@
 // structure of each stack box
 typedef struct node{
     int data;
-    struct stack *next; 
+    struct node *next; 
 } Node;
 static Node *top = NULL;
 // push , pop , is_empty , free_stack , peek
@@ -12,7 +12,7 @@ static Node *top = NULL;
 void push(int value){
     Node *new_node = malloc(sizeof(Node));
     if(!new_node){
-        printf(stderr, "Memory allocatiion fail in push function\n");
+        fprintf(stderr, "Memory allocatiion fail in push function\n");
         exit(EXIT_FAILURE);
     }
     new_node->data = value;
@@ -34,15 +34,15 @@ bool is_empty(void){
 }
 
 void free_stack (void){
-    while(is_empty){
+    while(!is_empty()){
         int temp; 
         pop(&temp);
     }
 }
 
 bool peek(int *top_value){
-    if(is_empty){
-        fprintf(stderr, "The stack is already empty ");
+    if(is_empty()){
+        fprintf(stderr, "The stack is already empty\n");
         return false;
     }
     *top_value = top->data;
