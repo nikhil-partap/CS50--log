@@ -1,18 +1,31 @@
 #include<stdio.h>
 #include<stdlib.h>
+#include<stdbool.h>
 #include "stack.h"
-typedef struct stack{
+typedef struct node{
     int data;
     struct stack *next; 
-} stack;
-
-
-
+} Node;
+static Node *top = NULL;
 // push , pop , is_empty , free_stack , peek
 
-int main(void){
-
+void push(int value){
+    Node *new_node = malloc(sizeof(Node));
+    if(!new_node){
+        printf(stderr, "Memory allocatiion fail in push function\n");
+        exit(EXIT_FAILURE);
+    }
+    new_node->data = value;
+    new_node->next = top;
+    top = new_node; 
 }
+
+bool pop(int *popped_value){
+    if(is_empty())return false;
+
+    
+}
+
 
 
 
