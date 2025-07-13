@@ -18,3 +18,4 @@ void free_stack (void);
 // it takes a look at the data stored in the top node 
 bool peek(int *top_value);
 
+#endif // STACK_H

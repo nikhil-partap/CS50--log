@@ -1,0 +1,6 @@
+just paste the bellow command in to the terminal at the file destination
+
+
+
+clang -Wall -Wextra -std=c11 main.c stack.c -o stack
+./stack
