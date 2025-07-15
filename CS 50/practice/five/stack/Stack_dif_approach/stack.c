@@ -1,13 +1,16 @@
 #include<stdio.h>
 #include<stdlib.h>
 #include "stack.h"
+
+// push , pop , is_empty , free_stack , peek
+
 // structure of each stack box
 typedef struct node{
     int data;
     struct node *next; 
 } Node;
 static Node *top = NULL;
-// push , pop , is_empty , free_stack , peek
+
 
 void push(int value){
     Node *new_node = malloc(sizeof(Node));
