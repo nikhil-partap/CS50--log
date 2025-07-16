@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,14 +13,14 @@ typedef struct node{
 static node **table = NULL;
 static int buckets = 0;
 
-static unsigned hash(const char *key){
+static unsigned hash(const char *key) {
     unsigned int hash = 5381;
     
     int c;
     while((c = *key++)){
     hash = hash*33 + c;
-    return hash % buckets;
     }
+    return hash % buckets;
 }
 
 void ht_init (int buckets_count){
