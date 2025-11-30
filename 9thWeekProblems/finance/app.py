@@ -8,27 +8,31 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from helpers import apology, login_required, lookup, usd
 
-# Configure application
+
+# Initialize Flask application
 app = Flask(__name__)
 
-# Secret key for sessions (required)
+# Set secret key for session encryption (uses environment variable or fallback)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
 
-# Custom filter
+# Register custom Jinja filter for USD formatting
 app.jinja_env.filters["usd"] = usd
 
-# Configure session to use filesystem (instead of signed cookies)
+# Configure session storage to use filesystem instead of cookies
 app.config["SESSION_PERMANENT"] = False
 app.config["SESSION_TYPE"] = "filesystem"
 Session(app)
 
-# Configure CS50 Library to use SQLite database
+# Initialize database connection
 db = SQL("sqlite:///finance.db")
 
 
 @app.after_request
 def after_request(response):
-    """Ensure responses aren't cached"""
+    """
+    Disable caching for all responses to ensure users see fresh data.
+    This prevents browsers from storing outdated stock prices or portfolio values.
+    """
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Expires"] = 0
     response.headers["Pragma"] = "no-cache"
@@ -38,25 +42,47 @@ def after_request(response):
 @app.route("/")
 @login_required
 def index():
-    """Show portfolio of stocks"""
+    """
+    Display the user's portfolio homepage showing all owned stocks,
+    current prices, and total portfolio value.
+    """
     user_id = session.get("user_id")
+    
+    # Fetch user's stocks and account information
     try:
-        stocks = db.execute("SELECT * FROM user_shares WHERE user = ? AND quantity > 0", user_id)
-        user_rows = db.execute("SELECT * FROM users WHERE id=?", user_id)
-        if len(user_rows) != 1:
+        stocks = db.execute(
+            "SELECT * FROM user_shares WHERE user = ? AND quantity > 0", 
+            user_id
+        )
+        user_rows = db.execute("SELECT * FROM users WHERE id = ?", user_id)
+        
+        if not user_rows:
             return apology("Could not find user.", 403)
+        
         user = user_rows[0]
         user["stock_values"] = 0
     except Exception as error:
         return apology(f"Could not fetch the data. {error}", 500)
 
+    # Build stock price cache and compute portfolio value
     stock_data = {}
+    total_portfolio_value = 0
+    
     for stock in stocks:
-        if stock["symbol"] not in stock_data:
-            res = lookup(stock["symbol"])
-            if res:
-              stock_data[stock["symbol"]] = res
-        user["stock_values"] += stock["quantity"]*stock_data[stock["symbol"]]["price"]
+        symbol = stock["symbol"]
+        
+        # Cache stock price lookup to avoid redundant API calls
+        if symbol not in stock_data:
+            price_info = lookup(symbol)
+            if price_info:
+                stock_data[symbol] = price_info
+        
+        # Accumulate total portfolio value
+        if symbol in stock_data:
+            holding_value = stock["quantity"] * stock_data[symbol]["price"]
+            total_portfolio_value += holding_value
+    
+    user["stock_values"] = total_portfolio_value
 
     return render_template("index.html", stocks=stocks, user=user, stock_data=stock_data)
 
@@ -64,228 +90,349 @@ def index():
 @app.route("/buy", methods=["GET", "POST"])
 @login_required
 def buy():
-    """Buy shares of stock"""
+    """
+    Handle stock purchase requests.
+    GET: Display the buy form
+    POST: Process the purchase transaction
+    """
     if request.method == "GET":
         return render_template("buy.html")
-    else:
-        symbol = request.form.get("symbol", "").strip()
-        try:
-            quantity = int(request.form.get("shares", "").strip())
-            if quantity <= 0:
-                raise ValueError("Quantity must be positive")
-        except:
-            return apology("Enter positive integer for number of shares.")
-        try:
-            stock_data = lookup(symbol)
-        except Exception as error:
-            return apology(f"Error: {error}.", 400)
+    
+    # Extract and sanitize form data
+    symbol = request.form.get("symbol", "").strip()
+    shares_input = request.form.get("shares", "").strip()
+    
+    # Parse and validate quantity
+    try:
+        quantity = int(shares_input)
+        if quantity <= 0:
+            raise ValueError("Quantity must be positive")
+    except (ValueError, TypeError):
+        return apology("Enter positive integer for number of shares.")
+    
+    # Fetch current market price
+    try:
+        stock_data = lookup(symbol)
+    except Exception as error:
+        return apology(f"Error: {error}.", 400)
 
-        if not stock_data:
-            return apology("Invalid symbol.", 400)
+    if not stock_data:
+        return apology("Invalid symbol.", 400)
 
-        cost = quantity*stock_data["price"]
+    # Compute transaction cost
+    transaction_cost = quantity * stock_data["price"]
+    current_user_id = session.get("user_id")
 
-        user_rows = db.execute("SELECT * FROM users WHERE id = ?", session.get("user_id"))
-        if len(user_rows) != 1:
-            return apology("Could not find the user.", 403)
-        user = user_rows[0]
-        if cost > user.get("cash"):
-            return apology("Not enough money to buy, you brook.")
+    # Retrieve user account details
+    user_rows = db.execute("SELECT * FROM users WHERE id = ?", current_user_id)
+    if not user_rows:
+        return apology("Could not find the user.", 403)
+    
+    user = user_rows[0]
+    available_cash = user.get("cash")
+    
+    # Check if user can afford the purchase
+    if transaction_cost > available_cash:
+        return apology("Not enough money to buy, you brook.")
 
-        try:
-            buy_stock = db.execute("INSERT INTO user_shares (user, symbol, price, quantity) VALUES(?, ?, ?, ?)", user.get("id"), symbol, stock_data["price"], quantity)
-            user_update = db.execute("UPDATE users SET cash = ? WHERE id = ?", user.get("cash")-cost, user.get("id"))
-            db.execute("INSERT INTO user_histories (user, symbol, buying_price, activity, quantity) VALUES(?, ?, ?, ?, ?)", user["id"], symbol, stock_data["price"], 'buy', quantity)
+    # Process transaction in database
+    try:
+        new_cash_balance = available_cash - transaction_cost
+        
+        # Record new share ownership
+        db.execute(
+            "INSERT INTO user_shares (user, symbol, price, quantity) VALUES(?, ?, ?, ?)", 
+            current_user_id, symbol, stock_data["price"], quantity
+        )
+        
+        # Update user's cash balance
+        db.execute(
+            "UPDATE users SET cash = ? WHERE id = ?", 
+            new_cash_balance, current_user_id
+        )
+        
+        # Log transaction to history
+        db.execute(
+            "INSERT INTO user_histories (user, symbol, buying_price, activity, quantity) VALUES(?, ?, ?, ?, ?)", 
+            current_user_id, symbol, stock_data["price"], 'buy', quantity
+        )
+    except Exception as error:
+        return apology(f"Couldn't buy the stock. {error}")
 
-        except Exception as error:
-            return apology(f"Couldn't buy the stock. {error}")
-
-        return redirect("/")
+    return redirect("/")
 
 
 @app.route("/history")
 @login_required
 def history():
-    """Show history of transactions"""
+    """
+    Display complete transaction history for the logged-in user,
+    including all buy and sell activities.
+    """
     user_id = session.get("user_id")
+    
+    # Verify user exists
     user_rows = db.execute("SELECT * FROM users WHERE id = ?", user_id)
     if len(user_rows) != 1:
         return apology("Could not find the user.", 403)
     user = user_rows[0]
 
-    histories = db.execute("SELECT * FROM user_histories WHERE user=?", user_id)
+    # Fetch all transaction records
+    histories = db.execute("SELECT * FROM user_histories WHERE user = ?", user_id)
+    
     return render_template("history.html", histories=histories)
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    """Log user in"""
-
-    # Forget any user_id
+    """
+    Authenticate user login.
+    GET: Display login form
+    POST: Validate credentials and create session
+    """
+    # Clear any existing session data
     session.clear()
 
-    # User reached route via POST (as by submitting a form via POST)
     if request.method == "POST":
-        # Ensure username was submitted
-        if not request.form.get("username"):
+        # Extract credentials from form
+        username_input = request.form.get("username")
+        password_input = request.form.get("password")
+        
+        # Validate username input
+        if not username_input:
             return apology("must provide username", 403)
 
-        # Ensure password was submitted
-        elif not request.form.get("password"):
+        # Validate password input
+        if not password_input:
             return apology("must provide password", 403)
 
-        # Query database for username
-        rows = db.execute(
-            "SELECT * FROM users WHERE username = ?", request.form.get("username")
+        # Search for user account
+        user_records = db.execute(
+            "SELECT * FROM users WHERE username = ?", 
+            username_input
         )
 
-        # Ensure username exists and password is correct
-        if len(rows) != 1 or not check_password_hash(
-            rows[0]["hash"], request.form.get("password")
-        ):
+        # Authenticate credentials
+        is_valid_user = (
+            len(user_records) == 1 and 
+            check_password_hash(user_records[0]["hash"], password_input)
+        )
+        
+        if not is_valid_user:
             return apology("invalid username and/or password", 403)
 
-        # Remember which user has logged in
-        session["user_id"] = rows[0]["id"]
+        # Establish user session
+        session["user_id"] = user_records[0]["id"]
 
-        # Redirect user to home page
+        # Redirect to portfolio homepage
         return redirect("/")
 
-    # User reached route via GET (as by clicking a link or via redirect)
-    else:
-        return render_template("login.html")
+    # Display login form for GET requests
+    return render_template("login.html")
 
 
 @app.route("/logout")
 def logout():
-    """Log user out"""
-
-    # Forget any user_id
+    """
+    Log out the current user by clearing their session data
+    and redirecting to the login page.
+    """
+    # Clear all session data
     session.clear()
 
-    # Redirect user to login form
+    # Redirect to login page
     return redirect("/")
 
 
 @app.route("/quote", methods=["GET", "POST"])
 @login_required
 def quote():
-    """Get stock quote."""
+    """
+    Look up current stock price by symbol.
+    GET: Display quote lookup form
+    POST: Fetch and display stock information
+    """
     if request.method == "GET":
         return render_template("quote.html")
-    else:
-        symbol = request.form.get("symbol", "")
-        if not symbol:
-            return apology("Provide valid symbol.", 400)
-        try:
-            data = lookup(symbol)
-        except Exception as error:
-            return apology(f"ERROR: {error}", 500)
-        if not data:
-            return apology(f"Code does not exist", 400)
-        return render_template("quote.html", data=data)
+    
+    # Validate symbol input
+    symbol = request.form.get("symbol", "")
+    if not symbol:
+        return apology("Provide valid symbol.", 400)
+    
+    # Lookup stock information
+    try:
+        data = lookup(symbol)
+    except Exception as error:
+        return apology(f"ERROR: {error}", 500)
+    
+    if not data:
+        return apology("Code does not exist", 400)
+    
+    return render_template("quote.html", data=data)
 
 
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
-    """Register user"""
+    """
+    Register a new user account.
+    GET: Display registration form
+    POST: Create new user and log them in
+    """
     if request.method == "GET":
         return render_template('register_user.html')
-    else:
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "").strip()
-        confirm = request.form.get("confirmation", "").strip()
+    
+    # Extract and sanitize registration form data
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "").strip()
+    confirm = request.form.get("confirmation", "").strip()
 
-        if not username:
-            return apology("must provide username", 400)
+    # Perform input validation checks
+    validation_errors = []
+    
+    if not username:
+        return apology("must provide username", 400)
+    
+    if not password:
+        return apology("must provide password", 400)
+    
+    if not confirm or confirm != password:
+        return apology("confirm password must match with password", 400)
 
-        # Ensure password was submitted
-        elif not password:
-            return apology("must provide password", 400)
+    # Verify username availability
+    existing_users = db.execute("SELECT * FROM users WHERE username = ?", username)
+    if existing_users:
+        return apology("Username already exists.", 400)
 
-        # Ensure confirm was submitted and equal
-        elif not confirm or confirm != password:
-            return apology("confirm password must match with password", 400)
+    try:
+        # Hash password for secure storage
+        password_hash = generate_password_hash(password)
+        
+        # Insert new user record
+        db.execute(
+            "INSERT INTO users (username, hash) VALUES(?, ?)", 
+            username, password_hash
+        )
 
-        # Query database for username
-        rows = db.execute("SELECT * FROM users WHERE username = ?", username)
+        # Fetch newly created user account
+        new_user = db.execute("SELECT id FROM users WHERE username = ?", username)
+        if not new_user:
+            return apology("registration failed", 500)
 
-        # Ensure username exists and password is correct
-        if len(rows) != 0:
-            return apology("Username already exists.", 400)
+        # Auto-login: establish session for new user
+        session["user_id"] = new_user[0]["id"]
+    except Exception as e:
+        return apology(f"registration error: {e}", 500)
 
-        try:
-            # register user
-            db.execute("INSERT INTO users (username, hash) VALUES(?, ?)", username, generate_password_hash(password))
-
-            # Get the newly created user's id
-            rows = db.execute("SELECT id FROM users WHERE username = ?", username)
-            if len(rows) != 1:
-                return apology("registration failed", 500)
-
-            # Remember which user has logged in
-            session["user_id"] = rows[0]["id"]
-        except Exception as e:
-            return apology(f"registration error: {e}", 500)
-
-        return redirect("/")
+    return redirect("/")
 
 @app.route("/sell", methods=["GET", "POST"])
 @login_required
 def sell():
-    """Sell shares of stock"""
+    """
+    Handle stock selling transactions.
+    GET: Display sell form with user's current holdings
+    POST: Process the sale using FIFO (First In, First Out) method
+    """
     user_id = session.get("user_id")
-    user_rows = db.execute("SELECT * FROM users WHERE id=?", user_id)
-    if len(user_rows) != 1:
+    
+    # Retrieve user account information
+    user_rows = db.execute("SELECT * FROM users WHERE id = ?", user_id)
+    if not user_rows:
         return apology("Could not find user in database.", 403)
     user = user_rows[0]
-    share_list = db.execute("SELECT * FROM user_shares WHERE user=? AND quantity > 0", user_id)
+    
+    # Query user's active stock positions
+    share_list = db.execute(
+        "SELECT * FROM user_shares WHERE user = ? AND quantity > 0", 
+        user_id
+    )
+    
+    # Build price lookup cache for portfolio
     stock_data = {}
     for stock in share_list:
-        if stock["symbol"] not in stock_data:
-            res = lookup(stock["symbol"])
-            if res:
-              stock_data[stock["symbol"]] = res
+        symbol = stock["symbol"]
+        if symbol not in stock_data:
+            price_info = lookup(symbol)
+            if price_info:
+                stock_data[symbol] = price_info
 
     if request.method == "GET":
         return render_template("sell.html", stock_data=stock_data, share_list=share_list)
-    else:
-        share_symbol = request.form.get("symbol", "")
-        try:
-            quantity = int(request.form.get("shares", ""))
-            if quantity <= 0:
-                raise ValueError("Shares must be positive integer.")
-        except Exception as error:
-            return apology(f"Error: Invalid share count {error}", 400)
+    
+    # Extract sale parameters from form
+    share_symbol = request.form.get("symbol", "")
+    shares_to_sell_input = request.form.get("shares", "")
+    
+    # Parse and validate sell quantity
+    try:
+        shares_to_sell = int(shares_to_sell_input)
+        if shares_to_sell <= 0:
+            raise ValueError("Shares must be positive integer.")
+    except (ValueError, TypeError) as error:
+        return apology(f"Error: Invalid share count {error}", 400)
 
-        # find total share of that symbol
-        share_list = db.execute("SELECT * FROM user_shares WHERE user=? AND symbol=? AND quantity > 0 ORDER BY created_at", user_id, share_symbol)
-        if not share_list:
-            return apology("This share doesn't exists", 404)
+    # Retrieve purchase history for this stock (FIFO order)
+    purchase_batches = db.execute(
+        "SELECT * FROM user_shares WHERE user = ? AND symbol = ? AND quantity > 0 ORDER BY created_at", 
+        user_id, share_symbol
+    )
+    
+    if not purchase_batches:
+        return apology("This share doesn't exists", 404)
 
-        res = lookup(share_symbol)
-        curr_price = res["price"]
-        share_count = db.execute("SELECT SUM(quantity) as count FROM user_shares WHERE user=? AND symbol=? AND quantity > 0 ORDER BY created_at", user_id, share_symbol)[0]['count']
-        capital_gain = 0
+    # Fetch current market price
+    market_data = lookup(share_symbol)
+    current_market_price = market_data["price"]
+    
+    # Calculate total available shares for this symbol
+    total_owned = db.execute(
+        "SELECT SUM(quantity) as count FROM user_shares WHERE user = ? AND symbol = ? AND quantity > 0", 
+        user_id, share_symbol
+    )[0]['count']
+    
+    # Ensure sufficient shares available
+    if total_owned < shares_to_sell:
+        return apology("Error: Not enough share to sell.", 400)
+    
+    total_proceeds = 0
+    remaining_to_sell = shares_to_sell
+    
+    # Execute FIFO sale algorithm
+    for batch in purchase_batches:
+        if remaining_to_sell <= 0:
+            break
+        
+        batch_id = batch["id"]
+        batch_quantity = batch["quantity"]
+        
+        # Calculate shares to sell from this batch
+        shares_from_batch = min(batch_quantity, remaining_to_sell)
+        transaction_timestamp = datetime.now()
+        
+        # Update batch inventory
+        db.execute(
+            "UPDATE user_shares SET quantity = ?, sold_quantity = ?, updated_at = ? WHERE id = ?", 
+            batch_quantity - shares_from_batch, shares_from_batch, transaction_timestamp, batch_id
+        )
+        
+        # Log sale transaction
+        db.execute(
+            "INSERT INTO user_histories (user, symbol, buying_price, selling_price, activity, quantity) VALUES(?, ?, ?, ?, ?, ?)", 
+            user_id, share_symbol, batch["price"], current_market_price, 'sell', shares_from_batch
+        )
+        
+        # Accumulate sale proceeds
+        batch_proceeds = current_market_price * shares_from_batch
+        total_proceeds += batch_proceeds
+        remaining_to_sell -= shares_from_batch
 
-        if share_count < quantity:
-            return apology("Error: Not enough share to sell.", 400)
-        for share in share_list:
-            share_id = share["id"]
-            if quantity <= 0:
-                break
-            # Handle both cases: selling all or part of this batch
-            share_count = share["quantity"]
-            sell_amount = min(share_count, quantity)
-            curr_time = datetime.now()
-            db.execute("UPDATE user_shares SET quantity=? , sold_quantity=? , updated_at=? WHERE id=?", share_count-sell_amount, sell_amount, curr_time, share_id)
-            # add entry in history
-            db.execute("INSERT INTO user_histories (user, symbol, buying_price, selling_price, activity, quantity) VALUES(?, ?, ?, ?, ?, ?)", user_id, share_symbol, share["price"], curr_price, 'sell', sell_amount)
-            capital_gain += (curr_price*sell_amount)
-            quantity -= sell_amount
+    # Credit proceeds to user account
+    updated_balance = user["cash"] + total_proceeds
+    db.execute(
+        "UPDATE users SET cash = ? WHERE id = ?", 
+        updated_balance, user_id
+    )
 
-        # update cash for user
-        db.execute("UPDATE users SET cash=? WHERE id=?", user["cash"]+capital_gain, user_id)
-
-        return redirect("/")
+    return redirect("/")
