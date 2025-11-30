@@ -218,12 +218,12 @@ def register():
         try:
             # register user
             db.execute("INSERT INTO users (username, hash) VALUES(?, ?)", username, generate_password_hash(password))
-            
+
             # Get the newly created user's id
             rows = db.execute("SELECT id FROM users WHERE username = ?", username)
             if len(rows) != 1:
                 return apology("registration failed", 500)
-            
+
             # Remember which user has logged in
             session["user_id"] = rows[0]["id"]
         except Exception as e:
