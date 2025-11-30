@@ -1,24 +1,22 @@
-{% extends "layout.html" %} {% block title %} Log In {% endblock %} {% block
-main %}
-<form action="/login" method="post">
+{% extends "layout.html" %} {% block title %} Quote {% endblock %} {% block main
+%}
+<form action="/quote" method="post">
   <div class="mb-3">
     <input
       autocomplete="off"
       autofocus
       class="form-control mx-auto w-auto"
-      name="username"
-      placeholder="Username"
+      name="symbol"
+      placeholder="Stock Symbol"
       type="text"
     />
   </div>
-  <div class="mb-3">
-    <input
-      class="form-control mx-auto w-auto"
-      name="password"
-      placeholder="Password"
-      type="password"
-    />
-  </div>
-  <button class="btn btn-primary" type="submit">Log In</button>
+  <button class="btn btn-primary" type="submit">Get Quote</button>
 </form>
-{% endblock %}
+
+{% if data %}
+<div class="mt-4">
+  <h3>{{ data.name }} ({{ data.symbol }})</h3>
+  <p class="lead">Current Price: {{ data.price | usd }}</p>
+</div>
+{% endif %} {% endblock %}
